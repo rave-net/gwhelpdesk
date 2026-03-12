@@ -20,7 +20,7 @@ class gw:
     def checkResponse(self, response):
         if response.text:
             dict = json.loads(response.text)
-            if 'object' in dict.keys():
+            if 'object' in list(dict.keys()):
                 objects = dict['object']
                 return objects
             else:
@@ -45,7 +45,7 @@ class gw:
         response = self.session.get(url)
         if response.text:
             dict = json.loads(response.text)
-            if 'resultInfo' in dict.keys():
+            if 'resultInfo' in list(dict.keys()):
                 if dict['resultInfo']['outOf'] == 0:
                     return 0
                 else:
@@ -164,7 +164,7 @@ class gw:
                 data = [grp['name'], grp['id'], grp['domainName'], grp['postOfficeName'], grp['visibility'], grp['@url']]
                 grp['url'] = grp['@url']
 
-                if 'ldapDn' in grp.keys():
+                if 'ldapDn' in list(grp.keys()):
                     dn = grp['ldapDn']
                     grp['ldapDn'] = dn
 
@@ -200,7 +200,7 @@ class gw:
         response = self.session.get(geturl)
         if response.text:
             j = json.loads(response.text)
-            print j
+            print(j)
             if j['resultInfo']['outOf'] == 0:
                 return 0
             else:
@@ -261,7 +261,7 @@ class gw:
             results = self.checkResponse(response)
             if 'object' in results:
                 #print results
-                print response.headers
+                print(response.headers)
                 return response.headers
 
 
@@ -298,7 +298,7 @@ class gw:
 
         response = self.session.get(url)
         #print response
-        from StringIO import StringIO
+        from io import StringIO
         image = response.open(StringIO())
         self.session.headers = {
             'Content-Type': 'application/json',
@@ -310,10 +310,10 @@ class gw:
         response = self.session.get(url)
         if response.text:
             sj = json.loads(response.text)
-            if 'object' in sj.keys():
+            if 'object' in list(sj.keys()):
                 for user in sj['object']:
                     self.userList.append(user)
-            if 'resultInfo' in sj.keys():
+            if 'resultInfo' in list(sj.keys()):
                 if 'nextId' in sj['resultInfo']:
                     nextId = sj['resultInfo']['nextId']
                     return nextId
@@ -328,7 +328,7 @@ class gw:
             dict = json.loads(response.text)
             if dict['resultInfo']['outOf'] == 0:
                 return gwusers
-            elif 'object' in dict.keys():
+            elif 'object' in list(dict.keys()):
                 objects = dict['object']
             else:
                 return gwusers
@@ -340,12 +340,12 @@ class gw:
             if 'USER' in user['id']:
                 details = self.getObject(user['id'])
                 details['pendingOp'] = 'false'
-                if 'pendingOp' in user.keys():
+                if 'pendingOp' in list(user.keys()):
                     details['pendingOp'] = 'true'
                 details['ldap'] = 'false'
                 ldap = self.checkPoLdap(user['postOfficeName'])
                 if ldap == 1:
-                    if 'ldapDn' in user.keys():
+                    if 'ldapDn' in list(user.keys()):
                         details['ldap'] = 'true'
                 gwusers.append(details)
         return gwusers
@@ -358,7 +358,7 @@ class gw:
             dict = json.loads(response.text)
             if dict['resultInfo']['outOf'] == 0:
                 return gwgrps
-            elif 'object' in dict.keys():
+            elif 'object' in list(dict.keys()):
                 objects = dict['object']
             else:
                 return gwgrps
@@ -370,7 +370,7 @@ class gw:
             if 'GROUP' in group['id']:
                 details = self.getObject(group['id'])
                 details['pendingOp'] = 'false'
-                if 'pendingOp' in group.keys():
+                if 'pendingOp' in list(group.keys()):
                     details['pendingOp'] = 'true'
                 gwgrps.append(details)
         return gwgrps
@@ -461,7 +461,7 @@ class gw:
         for i in range(1,10):
             response2 = self.session.get(url)
             data = self.checkResponse(response2)
-            if 'pendingOp' in data.keys():
+            if 'pendingOp' in list(data.keys()):
                 time.sleep(2)
             else:
                 pending = 0
@@ -482,7 +482,7 @@ class gw:
                 podict['ldap'] = True
             else:
                 podict['ldap'] = False
-            if 'externalRecord' in object.keys():
+            if 'externalRecord' in list(object.keys()):
                 podict['external'] = True
             else:
                 podict['external'] = False
@@ -493,7 +493,7 @@ class gw:
         poList = []
         url = '%s/gwadmin-service/list/post_office?externalRecord=true' % self.baseUrl
         response = self.session.get(url, timeout=5)
-        print response.text
+        print(response.text)
         objects = self.checkResponse(response)
         for object in objects:
             podict = {}
@@ -501,7 +501,7 @@ class gw:
             podict['url'] = object['@url']
             podict['id'] = object['id']
 
-            if 'externalRecord' in object.keys():
+            if 'externalRecord' in list(object.keys()):
                 podict['external'] = True
             else:
                 podict['external'] = False
@@ -522,7 +522,7 @@ class gw:
                 podict['ldap'] = True
             else:
                 podict['ldap'] = False
-            if 'externalRecord' in object.keys():
+            if 'externalRecord' in list(object.keys()):
                 podict['external'] = True
             else:
                 podict['external'] = False
@@ -539,7 +539,7 @@ class gw:
             domdict['name'] = object['name']
             domdict['url'] = object['@url']
 
-            if 'externalRecord' in object.keys():
+            if 'externalRecord' in list(object.keys()):
                 domdict['external'] = True
             else:
                 domdict['external'] = False
@@ -551,7 +551,7 @@ class gw:
         name = data['name']
         response = self.session.post(url, data=json.dumps(data), timeout=5)
         if response.text:
-            print json.loads(response.text)
+            print(json.loads(response.text))
             #return json.loads(response.text)
             return requests.headers
         else:
@@ -562,7 +562,7 @@ class gw:
         name = data['name']
         response = self.session.post(url, data=json.dumps(data), timeout=5)
         if response.text:
-            print json.loads(response.text)
+            print(json.loads(response.text))
             #return json.loads(response.text)
             return requests.headers
         else:
@@ -574,7 +574,7 @@ class gw:
         response = self.session.get(url)
         #print response.text
         users = self.checkResponse(response)
-        print users
+        print(users)
         return users
     def dissociate(self, id):
         user = self.getObject(id)
@@ -604,7 +604,7 @@ class gw:
         response = self.session.get(newurl)
         if response.text:
             dict = json.loads(response.text)
-            if 'object' in dict.keys():
+            if 'object' in list(dict.keys()):
                 objects = dict['object']
                 for grp in objects:
                     data = []
@@ -613,7 +613,7 @@ class gw:
                     data.append(grp['id'])
                     membership.append(data)
                 return membership
-            elif 'resultInfo' in dict.keys():
+            elif 'resultInfo' in list(dict.keys()):
                 return None
 
     def updateGroupMembership(self, name, userid, groupid, particpation ):
@@ -657,10 +657,10 @@ class gw:
         status = self.session.get(statusurl)
         if status.text:
             dict = json.loads(status.text)
-            if 'succeeded' in dict.keys():
+            if 'succeeded' in list(dict.keys()):
                 return 'Succeeded'
             else:
-                if 'lastAction' in dict.keys():
+                if 'lastAction' in list(dict.keys()):
                     lastaction = dict['object']['moveStatus']['lastAction']
                     return lastaction
 
@@ -671,7 +671,7 @@ class gw:
         response = self.session.get(url)
         if response.text:
             dict = json.loads(response.text)
-            if 'object' in dict.keys():
+            if 'object' in list(dict.keys()):
                 objects = dict['object']
                 for resource in objects:
                     data = []
@@ -682,7 +682,7 @@ class gw:
                     data.append(resource['domainName'])
                     resourcelist.append(data)
                 return resourcelist
-            elif 'resultInfo' in dict.keys():
+            elif 'resultInfo' in list(dict.keys()):
                 return None
         return resourcelist
 
@@ -713,7 +713,7 @@ class gw:
         response = self.session.get(url)
         if response.text:
             dict = json.loads(response.text)
-            if 'object' in dict.keys():
+            if 'object' in list(dict.keys()):
                 objects = dict['object']
                 for nickname in objects:
                     data = {}
@@ -736,13 +736,13 @@ class gw:
                     nicknamelist.append(data)
 
                 return nicknamelist
-            elif 'resultInfo' in dict.keys():
+            elif 'resultInfo' in list(dict.keys()):
                 return None
         return nicknamelist
 
     def addNickname(self, **kwargs):
         data = {}
-        for key, value in kwargs.iteritems():
+        for key, value in kwargs.items():
             data[key] = value
         url = '%s/gwadmin-service/domains/%s/postoffices/%s/nicknames' % (self.baseUrl, data['domainName'], data['postOfficeName'] )
         results = self.session.post(url, data=json.dumps(data))

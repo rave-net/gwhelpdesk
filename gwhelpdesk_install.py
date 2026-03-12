@@ -4,7 +4,7 @@ from time import sleep
 
 def log(msg):
     logging.info(msg)
-    print msg
+    print(msg)
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(message)s',
@@ -35,7 +35,7 @@ elif '12' in data[1]:
     for line in p.stdout:
         log(line)
 
-    print 'Adding repository for nginx install...'
+    print('Adding repository for nginx install...')
     p = subprocess.Popen('zypper addrepo -G -t yum -c http://nginx.org/packages/sles/12 nginix', shell=True, stdout=subprocess.PIPE)
     for line in p.stdout:
         log(line)
@@ -82,9 +82,9 @@ for mod in piplist:
 log("Getting the gwhelpdesk app from git..")
 
 # Prompt for where you want gwhelpdesk installed
-baseDir = raw_input('Enter path for gwhelpdesk directory: ')
+baseDir = input('Enter path for gwhelpdesk directory: ')
 if not os.path.isdir(baseDir):
-    answer = raw_input("%s path not found,  crmbeate it?  (y/n)" % baseDir)
+    answer = input("%s path not found,  crmbeate it?  (y/n)" % baseDir)
     if answer.lower() == 'yes' or answer.lower() == 'y':
         os.mkdir(baseDir)
     else:
@@ -112,7 +112,7 @@ with open(newgwfile, 'r') as inputfile, open(gwfile,'w') as outputfile:
     for line in inputfile:
         line.strip()
         if 'APPDIR=' in line:
-            print 'Line = %s' % line
+            print('Line = %s' % line)
             outputfile.write(appdirline + '\n')
         else:
             outputfile.write(line)
@@ -152,4 +152,4 @@ log('')
 log('---- Done with installation ----')
 log('')
 
-print '--  cd to %s,  then run python manage.py setup to modify some db records.' % installDir
+print('--  cd to %s,  then run python manage.py setup to modify some db records.' % installDir)

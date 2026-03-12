@@ -25,7 +25,7 @@ class AddExtUser(forms.Form):
         pos = gw.getPolist()
         pochoices = []
         for po  in pos:
-            if 'externalRecord' in po.keys():
+            if 'externalRecord' in list(po.keys()):
 
                 choice = (po['name'],po['name'])
             pochoices.append(choice)
@@ -40,7 +40,7 @@ class AddExtUser(forms.Form):
             data = self.cleaned_data
 
     except:
-        print 'Init failed'
+        print('Init failed')
 
 class AddUser(forms.Form):
     try:
@@ -67,7 +67,7 @@ class AddUser(forms.Form):
                     #self.errors['No Match'] = self.error_class(['Passwords do not match'])
                     self.add_error('password2','Passwords do not match')
     except:
-        print 'Init failed'
+        print('Init failed')
 
 class AdminForm(ModelForm):
     class Meta:
@@ -422,4 +422,4 @@ class Nicknames(forms.Form):
         referreduser = forms.CharField(max_length=128)
 #        nickid = forms.CharField(max_length=128)
     except:
-        print "fail"
+        print("fail")

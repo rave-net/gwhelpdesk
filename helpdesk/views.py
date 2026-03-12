@@ -1,6 +1,7 @@
-from __future__ import unicode_literals
 
-from django.shortcuts import render, redirect, HttpResponseRedirect, render_to_response, reverse
+
+from django.shortcuts import render, redirect, HttpResponseRedirect
+from django.urls import reverse
 from django.contrib.auth.hashers import check_password, make_password, is_password_usable, PBKDF2PasswordHasher
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 
@@ -9,7 +10,7 @@ from .forms import *
 from django.conf import settings
 import logging, os
 import logging.config
-from lib import gwlib
+from .lib import gwlib
 from pprint import pprint
 
 from logging.handlers import RotatingFileHandler
@@ -62,7 +63,7 @@ def addadmin(request):
             obj.password = enc
             obj.password2 = enc2
             obj.save()
-            if 'username' in cd.keys():
+            if 'username' in list(cd.keys()):
                 log(request,'Admin: %s added' % cd['username'])
             return HttpResponseRedirect(reverse('admins'))
     else:
@@ -148,7 +149,7 @@ def addgrpmember(request):
                               {'users': userlist['userList'], 'firstset': firstset, 'usercount': usercount})
 
         elif 'add' in request.POST:
-            print "got to add"
+            print("got to add")
             userid = request.POST['id']
             username = request.POST['name']
             grpid = request.POST['grpid']
@@ -156,8 +157,8 @@ def addgrpmember(request):
 
 
             group = gw.getObject(grpid)
-            print '------'
-            print 'views 160 '
+            print('------')
+            print('views 160 ')
             pprint(group)
             #print userid
             #print username
@@ -170,9 +171,9 @@ def addgrpmember(request):
             }
             addtogrp = gw.addUserToGroup(data)
 
-            print '++++++++'
+            print('++++++++')
 
-            print 'veiw 179 %s' % addtogrp
+            print('veiw 179 %s' % addtogrp)
             if addtogrp == 201:
                 log(request, 'Added %s to Group %s' % (username, grpname))
                 members = gw.getGroupMembers(url)
@@ -339,7 +340,7 @@ def addextuser(request):
     polist = gw.getExtPolist()
     if request.method == "POST":
         form = AddExtUser(request.POST)
-        print request.POST
+        print(request.POST)
         if form.is_valid():
             #
             #print cd
@@ -358,7 +359,7 @@ def addextuser(request):
 
             retvalues = gw.addUser(pourl, postdata)
 
-            if 'error' in retvalues.keys():
+            if 'error' in list(retvalues.keys()):
                 messages.add_message(request, messages.ERROR,retvalues['statusMsg'])
             else:
                 if 'location' in retvalues:
@@ -368,7 +369,7 @@ def addextuser(request):
                     addressFormats = gw.addrFormats()
                     emailAddrs = gw.userAddresses(userData['@url'])
                     ldap = gw.checkPoLdap(userData['postOfficeName'])
-                    if (ldap == 1) and 'ldapDn' in userData.keys():
+                    if (ldap == 1) and 'ldapDn' in list(userData.keys()):
                         userData['ldap'] = 'true'
                     else:
                         userData['ldap'] = 'false'
@@ -396,7 +397,7 @@ def adduser(request):
         if form.is_valid():
             cd = form.cleaned_data
             if 'password' in cd:
-                print cd['password']
+                print(cd['password'])
                 pwd = cd['password']
                 pwd2 = cd['password2']
             else:
@@ -407,7 +408,7 @@ def adduser(request):
                 if po == postoffice['name']:
                     pourl = postoffice['url']
                     externalpo = postoffice['external']
-                    print externalpo
+                    print(externalpo)
             name = cd['name']
             givenName = cd['givenName']
             surname = cd ['surname']
@@ -418,7 +419,7 @@ def adduser(request):
             if externalpo == False:
                 postdata['password'] = pwd
             retvalues = gw.addUser(pourl, postdata)
-            if 'error' in retvalues.keys():
+            if 'error' in list(retvalues.keys()):
                 messages.add_message(request, messages.ERROR,retvalues['statusMsg'])
             else:
                 if 'location' in retvalues:
@@ -428,7 +429,7 @@ def adduser(request):
                     addressFormats = gw.addrFormats()
                     emailAddrs = gw.userAddresses(userData['@url'])
                     ldap = gw.checkPoLdap(userData['postOfficeName'])
-                    if (ldap == 1) and 'ldapDn' in userData.keys():
+                    if (ldap == 1) and 'ldapDn' in list(userData.keys()):
                         userData['ldap'] = 'true'
                     else:
                         userData['ldap'] = 'false'
@@ -515,7 +516,7 @@ def dissociate(request):
         log(request, 'Dissociated %s from directory' % userData['name'])
         emailAddrs = gw.userAddresses(userData['@url'])
         ldap = gw.checkPoLdap(userData['postOfficeName'])
-        if (ldap == 1) and 'ldapDn' in userData.keys():
+        if (ldap == 1) and 'ldapDn' in list(userData.keys()):
             userData['ldap'] = 'true'
         else:
             userData['ldap'] = 'false'
@@ -527,7 +528,7 @@ def dissociate(request):
         userData = gw.getObject(id)
         emailAddrs = gw.userAddresses(userData['@url'])
         ldap = gw.checkPoLdap(userData['postOfficeName'])
-        if (ldap == 1) and 'ldapDn' in userData.keys():
+        if (ldap == 1) and 'ldapDn' in list(userData.keys()):
             userData['ldap'] = 'true'
         else:
             userData['ldap'] = 'false'
@@ -707,7 +708,7 @@ def groupdetails(request):
 
         elif 'addmember' in request.POST:
 
-            print 'got to addmember'
+            print('got to addmember')
 
             gw = gwInit()
             addressFormats = gw.addrFormats()
@@ -727,9 +728,9 @@ def groupdetails(request):
                         firstset = True
                         return render(request, 'helpdesk/addgrpmember.html',
                                       {'users': userlist['userList'], 'firstset': firstset, 'usercount': usercount})
-                    print userlist
+                    print(userlist)
                 elif 'add' in request.POST:
-                    print "got to add"
+                    print("got to add")
 
 
                     u
@@ -753,7 +754,7 @@ def groupdetails(request):
             request.session['name'] = name
             groupdata = gw.getGroup(id)
             delmember = gw.delFromGroup(groupdata['@url'], request.POST['memberid'])
-            print delmember
+            print(delmember)
             if delmember == int(200):
                 log(request, 'Removed %s from group %s' % (request.POST['memberid'], name))
             idoms = gw.iDomains()
@@ -853,7 +854,7 @@ def groupupdatedata(formdata, uid, allowed):
     elif formdata['preferredAddressFormatInherited'] == False:
         preferredAddressFormat['inherited'] = True
         changedData['preferredEmailId'] = ""
-        if 'preferredAddressFormat' in group.keys():
+        if 'preferredAddressFormat' in list(group.keys()):
             preferredAddressFormat['value'] = group['preferredAddressFormat']['value']
 
     allowedAddressFormats['value'] = values
@@ -865,7 +866,7 @@ def groupupdatedata(formdata, uid, allowed):
         internetDomainName['value'] = formdata['iDomainValue']
     elif formdata['internetDomainNameOverride'] == False:
         internetDomainName['inherited'] = True
-        if 'internetDomainName' in group.keys():
+        if 'internetDomainName' in list(group.keys()):
             internetDomainName['value'] = group['internetDomainName']['value']
     internetDomainName['exclusive'] = formdata['iDomainExclusive']
     changedData['internetDomainName'] = internetDomainName
@@ -886,17 +887,17 @@ def groups(request):
             grpid = cd['grpid']
             groupname = cd['group']
             participation = cd['participation']
-            if 'edit' in request.POST.keys():
+            if 'edit' in list(request.POST.keys()):
                 x = gw.updateGroupMembership(name, userid, grpid, participation)
                 log(request, 'Modified Group Participation for user: %s in group: %s' % (request.session['name'], groupname))
                 groupList = gw.userGroupMembership(gwid)
                 return render(request, 'helpdesk/groups.html', {'form': form, 'groupList': groupList})
-            elif 'remove' in request.POST.keys():
+            elif 'remove' in list(request.POST.keys()):
                 remove = gw.removeFromGroup(userid, grpid)
                 log(request, 'Removed %s from group: %s' % (request.session['name'], groupname))
                 groupList = gw.userGroupMembership(gwid)
                 return render(request, 'helpdesk/groups.html', {'form': form, 'groupList': groupList})
-            elif 'add' in request.POST.keys():
+            elif 'add' in list(request.POST.keys()):
                 grps = request.POST.getlist('groups')
                 gw.addUserToGroups(grps, request.session['id'])
                 groupList = gw.userGroupMembership(request.session['id'])
@@ -924,7 +925,7 @@ def gwconfig(request):
             if whoami == 1:
                 messages.add_message(request, messages.ERROR,
                                          "Connection to GroupWise Admin Service Failed,  Check settings.")
-            elif 'roles' in whoami.keys():
+            elif 'roles' in list(whoami.keys()):
                 if 'SYSTEM_RECORD' in whoami['roles']:
                     messages.add_message(request, messages.SUCCESS, "Login to GroupWise Admin service successful")
                 else:
@@ -950,7 +951,7 @@ def gwconfig(request):
                 record.save()
                 gw = gwInit()
                 whoami = gw.whoami()
-                if 'roles' in whoami.keys():
+                if 'roles' in list(whoami.keys()):
                     if 'SYSTEM_RECORD' in whoami['roles']:
                         messages.add_message(request, messages.SUCCESS, "OK")
                     else:
@@ -1116,7 +1117,7 @@ def move(request):
     gw = gwInit()
     if request.method == "POST":
         form = Move(request.POST)
-        print form.errors
+        print(form.errors)
         if form.is_valid():
             cd = form.cleaned_data
             POST, DOMAIN, PONAME = cd['postoffice'].split('.')
@@ -1132,7 +1133,7 @@ def move(request):
             userData = gw.getObject(newid)
             emailAddrs = gw.userAddresses(userData['@url'])
             ldap = gw.checkPoLdap(userData['postOfficeName'])
-            if (ldap == 1) and 'ldapDn' in userData.keys():
+            if (ldap == 1) and 'ldapDn' in list(userData.keys()):
                 userData['ldap'] = 'true'
             else:
                 userData['ldap'] = 'false'
@@ -1176,9 +1177,9 @@ def rename(request):
         form = Rename(request.POST)
         #print form.errors
         if form.is_valid():
-            if 'id' in request.session.keys():
+            if 'id' in list(request.session.keys()):
                 del request.session['id']
-            if 'name' in request.session.keys():
+            if 'name' in list(request.session.keys()):
                 del request.session['name']
             cd = form.cleaned_data
             id = cd['id']
@@ -1194,7 +1195,7 @@ def rename(request):
             userData = gw.getObject(newid)
             emailAddrs = gw.userAddresses(userData['@url'])
             ldap = gw.checkPoLdap(userData['postOfficeName'])
-            if (ldap == 1) and 'ldapDn' in userData.keys():
+            if (ldap == 1) and 'ldapDn' in list(userData.keys()):
                 userData['ldap'] = 'true'
             else:
                 userData['ldap'] = 'false'
@@ -1273,7 +1274,7 @@ def searchresults(request):
 
 def updatedata(formdata, uid, allowed):
 
-    print formdata
+    print(formdata)
 
 
     addressFormats = ['HOST','USER','FIRST_LAST','LAST_FIRST','FLAST']
@@ -1309,7 +1310,7 @@ def updatedata(formdata, uid, allowed):
     userAllowedValues = user['allowedAddressFormats']['value']
     changedData = {}
     for key in gwkeys:
-        if key in formdata.keys():
+        if key in list(formdata.keys()):
             changedData[key] = formdata[key]
         else:
             break
@@ -1343,7 +1344,7 @@ def updatedata(formdata, uid, allowed):
     elif formdata['preferredAddressFormatInherited'] == False:
         preferredAddressFormat['inherited'] = True
         changedData['preferredEmailId'] = ""
-        if 'preferredAddressFormat' in user.keys():
+        if 'preferredAddressFormat' in list(user.keys()):
             preferredAddressFormat['value'] = user['preferredAddressFormat']['value']
         else:
             preferredAddressFormat['value'] = 'FIRST'
@@ -1357,7 +1358,7 @@ def updatedata(formdata, uid, allowed):
         internetDomainName['value'] = formdata['iDomainValue']
     elif formdata['internetDomainNameOverride'] == False:
         internetDomainName['inherited'] = True
-        if 'internetDomainName' in user.keys():
+        if 'internetDomainName' in list(user.keys()):
             internetDomainName['value'] = user['internetDomainName']['value']
     internetDomainName['exclusive'] = formdata['iDomainExclusive']
     changedData['internetDomainName'] = internetDomainName
@@ -1376,7 +1377,7 @@ def userdata(request):
     addressFormats = gw.addrFormats()
     if request.method == "POST":
         if 'edit' in request.POST:
-            if 'id' in request.session.keys():
+            if 'id' in list(request.session.keys()):
                 del request.session['id']
             form = SearchResults(request.POST)
             if form.is_valid():
@@ -1389,7 +1390,7 @@ def userdata(request):
                 request.session['poname'] = userData['postOfficeName']
                 emailAddrs = gw.userAddresses(userData['@url'])
                 ldap = gw.checkPoLdap(userData['postOfficeName'])
-                if (ldap == 1) and 'ldapDn' in userData.keys():
+                if (ldap == 1) and 'ldapDn' in list(userData.keys()):
                     userData['ldap'] = 'true'
                 else:
                     userData['ldap'] = 'false'
@@ -1418,7 +1419,7 @@ def userdata(request):
             request.session.header = 'Change GroupWise Password for %s' % request.POST['name']
             form = SearchResults(request.POST)
             if form.is_valid():
-                if 'id' in request.session.keys():
+                if 'id' in list(request.session.keys()):
                     del request.session['id']
                     request.session['name'] = request.POST['name']
                 cd = form.cleaned_data
@@ -1440,7 +1441,7 @@ def userdata(request):
                 newData = gw.updateUser(uid, userDict)
                 emailAddrs = gw.userAddresses(newData['@url'])
                 ldap = gw.checkPoLdap(newData['postOfficeName'])
-                if (ldap == 1) and 'ldapDn' in newData.keys():
+                if (ldap == 1) and 'ldapDn' in list(newData.keys()):
                     newData['ldap'] = 'true'
                 else:
                     newData['ldap'] = 'false'
@@ -1464,7 +1465,7 @@ def extuserdata(request):
     addressFormats = gw.addrFormats()
     if request.method == "POST":
         if 'edit' in request.POST:
-            if 'id' in request.session.keys():
+            if 'id' in list(request.session.keys()):
                 del request.session['id']
             form = SearchResults(request.POST)
             if form.is_valid():
@@ -1555,7 +1556,7 @@ def userlist(request):
             userData = gw.getObject(id)
             emailAddrs = gw.userAddresses(userData['@url'])
             ldap = gw.checkPoLdap(userData['postOfficeName'])
-            if (ldap == 1) and 'ldapDn' in userData.keys():
+            if (ldap == 1) and 'ldapDn' in list(userData.keys()):
                 userData['ldap'] = 'true'
             else:
                 userData['ldap'] = 'false'
