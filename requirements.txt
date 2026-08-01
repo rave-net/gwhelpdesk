@@ -1,0 +1,4 @@
+Django>=5.2,<5.3
+gunicorn>=23.0,<24
+requests>=2.32,<3
+django-ipware>=7.0,<8
