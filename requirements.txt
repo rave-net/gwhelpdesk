@@ -1,6 +1,4 @@
-Django>=4.2,<5.0
-gunicorn>=21.2.0
-requests>=2.31.0
-django-baseurl>=1.0.3
-django-ipware>=7.0.1
-gitpython>=3.1.43
+Django>=5.2,<5.3
+gunicorn>=23.0,<24
+requests>=2.32,<3
+django-ipware>=7.0,<8
