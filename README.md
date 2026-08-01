@@ -1,40 +1,86 @@
-GWHELPDESK
+# GWHelpdesk
 
-When GroupWise 2014 was released, it included a brand new web based administration console.  With the new admin tool, administrators could assign other GroupWise users as administrators at a System, Domain or Post Office level.  While handy,  many GroupWise customers have requested that this be expanded to provide more of a helpdesk type role based administration model,  where users can be assigned a role to act as a user/group administrator across the entire GroupWise system,  but not be able to add or modify system objects.
+GWHelpdesk provides a role-oriented web interface for common GroupWise user and group administration tasks. It communicates with the GroupWise Admin REST API and does not modify GroupWise databases directly.
 
-GWHelpdesk is an attempt to address this need.   It uses the GroupWise REST API for all  GroupWise admin functions.  The application configuration consists of a record for your GroupWise Admin server, with IP addr/hostname, admin port, system admin name and password.  These settings are used for all communication to GroupWise admin service.  
-The application has the ability to have 4 administrative roles:
+This branch is the Python 3 modernization of the original Django 1.10 application.
 
-  •	Administrator - Has all access to all GroupWise user objects.  Also use this role to create other administrators.
-  •	Helpdesk – Can add/modify/delete GroupWise users.
-  •	HelpDesk Light – Can only modify users, not add or delete.
-  •	Password – Can only be used to change user passwords.
+## Supported runtime
 
-Requirements:
+- Python 3.10 or newer
+- Django 5.2 LTS
+- A GroupWise system exposing the HTTPS Admin REST service
+- SQLite for local application configuration and administrator records
+- Gunicorn and a reverse proxy such as nginx for production
 
-  •	A Linux server.  Tested and supported on openSuse 42.2, 42.3 - (Leap distribution)  https://software.opensuse.org/distributions/leap
-    
-    Also tested on SLES12 Sp2 and Sp3.  (on your own for licensing SLES,  the GroupWise SLES entitlement 
-    does not apply to this application.
-  
-  •	A valid internet connection, required to download applcation from github.
-  
-  •	A GroupWise 2014 or later system.  Only tested against GroupWise 2014 SP2 and GroupWise 18.0.1, no testing on prior versions.
+The current code must be validated against the exact GroupWise release used in production. Automated tests mock or avoid the GroupWise API and do not replace testing against a non-production GroupWise system.
 
-You can get by with a text only install for the OS, but you can do the whole GUI thing if you want.
+## Quick start
 
-Python 3.10 migration notes:
+```bash
+python3 gwhelpdesk_install.py
+source .venv/bin/activate
+python manage.py setup
+python manage.py runserver 0.0.0.0:8000
+```
 
-  * Use Python 3.10+ and install dependencies from `requirements.txt`.
-  * The legacy `gwhelpdesk_install.py` helper has been syntax-updated for Python 3, but it still contains distro-specific package assumptions and should be treated as optional.
+The installer creates a virtual environment, installs `requirements.txt`, runs database migrations, and executes Django's configuration checks. It does not install OS packages or make changes under `/etc`.
 
-After you install dependencies, cd to your install directory/gwhelpdesk and run:
-  python manage.py setup
+A manual installation is equivalent:
 
-This will walk you thru the setup to connect to your GW admin service, and create the initial site administrator, then do some configuration for running the application. It will also start the gwhelpdesk script and run nginx, which is the webserver used.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python manage.py migrate
+python manage.py setup
+python manage.py check
+```
 
-The app is written in Python use the Django framework. It also uses a python module called gunicorn to run the django application. The /etc/init.d/gwhelpdesk start script actually runs gunicorn. It listens on localhost port 8000.   nginx is configured to act as a proxy server for gunicorn. The setup scripts above will prompt you for an IPaddr and/or hostname and port, which is used for the application and nginx configuration. Port 80 should work fine.
+## Configuration
 
-If you wish to enable SSL for nginx, see:
-http://nginx.org/en/docs/http/configuring_https_servers.html
+Set these values in systemd, Docker Compose, or the service environment:
 
+- `DJANGO_SECRET_KEY`: required for production.
+- `DJANGO_ALLOWED_HOSTS`: comma-separated hostnames or IP addresses.
+- `DJANGO_CSRF_TRUSTED_ORIGINS`: comma-separated HTTPS origins.
+- `DJANGO_COOKIE_SECURE=true`: use when the site is published over HTTPS.
+- `GW_VERIFY_TLS=true`: verifies the GroupWise Admin service certificate.
+- `REQUESTS_CA_BUNDLE`: internal CA bundle when GroupWise uses a private CA.
+- `GW_ADMIN_PASSWORD`: optional service environment override for the password stored in SQLite.
+
+Disabling GroupWise TLS verification should be limited to temporary testing:
+
+```bash
+export GW_VERIFY_TLS=false
+```
+
+## Production example
+
+```bash
+source .venv/bin/activate
+python manage.py migrate
+python manage.py collectstatic --noinput
+python manage.py check --deploy
+gunicorn --workers 3 --bind 127.0.0.1:8000 gwhelp.wsgi:application
+```
+
+The original SysV init and SLES 12 package automation are deliberately no longer part of `manage.py setup`. Service configuration belongs in a systemd unit or container deployment.
+
+## Validation
+
+```bash
+python -m compileall -q .
+python manage.py check
+python manage.py makemigrations --check --dry-run
+python manage.py test
+```
+
+GitHub Actions runs these checks on Python 3.10, 3.12, and 3.13.
+
+## Upgrade notes
+
+- Existing local administrator password hashes created by the old fixed-salt method may need to be reset with `python manage.py setup`; newly created passwords use Django's current password hasher.
+- Retain the existing SQLite database and run `python manage.py migrate`.
+- Legacy templates using `{% load staticfiles %}` are supported by a temporary compatibility template-tag module.
+- GroupWise credentials should ultimately be moved from SQLite to a secrets manager or service environment.
