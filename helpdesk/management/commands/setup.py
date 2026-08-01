@@ -1,304 +1,117 @@
-from django.core.management import BaseCommand
-from helpdesk.models import GWSettings
-from helpdesk.lib import gwlib
-from shutil import copy2, move
-import stat, os, requests, json, sys
-from socket import gethostbyname, gethostname, getfqdn
-from sys import exit
-from helpdesk.models import Admin
+from __future__ import annotations
+
 from getpass import getpass
-from django.contrib.auth.hashers import PBKDF2PasswordHasher
-import gwhelp.settings
-from subprocess import Popen, PIPE
 
-# The class must be named Command, and subclass BaseCommand
+from django.contrib.auth.hashers import make_password
+from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
+
+from helpdesk.lib import gwlib
+from helpdesk.models import Admin, GWSettings
+
+
 class Command(BaseCommand):
-    help = "This doesn't do anything yet"
+    help = "Configure the GroupWise Admin service and create a site administrator."
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--skip-gw-check",
+            action="store_true",
+            help="Save GroupWise settings without validating the connection.",
+        )
+
+    @transaction.atomic
     def handle(self, *args, **options):
-        def checkgw(host, port, admin, pwd):
-            gw = gwlib.gw(host, port, admin, pwd)
-            try:
-                whoami = gw.whoami()
+        self.stdout.write("GroupWise Admin Service Configuration")
+        config = GWSettings.objects.first()
 
-                if 'roles' in list(whoami.keys()):
-                    if 'SYSTEM_RECORD' in whoami['roles']:
-                        print('Connection to GW Admin Successful.')
-                    else:
-                        print('%s is not a system administrator.  Hit Control-C and rerun manage.py setup.' % admin)
-                        sys.exit()
-                else:
-                    status = whoami['statusMsg']
-                    print('Connection to GW Admin Failed.  Hit Control-C and rerun manage.py setup.')
-
-                    sys.exit()
-            except:
-                print('Connection to GW Admin Failed.  Hit Control-C and rerun manage.py setup.')
-
-        baseDir = gwhelp.settings.BASE_DIR
-        print("Let's get the info about your GroupWise Admin Server...")
-        gwconfig = GWSettings.objects.all()
-        if len(gwconfig) == 0:
-            print('GroupWise Admin Server Settings Configuration\n')
-            gwhost = input("GroupWise Admin Server IP/Hostname: ")
-            gwport = input('Admin Server PORT: ')
-            gwadmin = input('GroupWise System Administrator: ')
-            gwpass = input('Administrator Password: ')
-            check = checkgw(gwhost, gwport, gwadmin, gwpass)
-            gwconfig = GWSettings(gwHost=gwhost, gwPort=gwport, gwAdmin=gwadmin, gwPass=gwpass)
-            try:
-                gwconfig.save()
-                print('Record saved')
-            except:
-                print('Save record failed')
-
-        elif len(gwconfig) == 1:
-            print("GroupWise Settings exist")
-            print('Record shows GW Server is: %s' % gwconfig[0].gwHost)
-            answer = input('Modify Existing record?  (y/n) :')
-            if answer.lower() == 'y':
-                self.updateConfig()
-        print('')
-        print("Okay, that's done.  Now we need to create a site Administrator..")
-        admins = Admin.objects.all()
-        if len(admins) == 0:
-            self.createAdmin()
+        if config is None or self._yes_no("Configure GroupWise connection", default=True):
+            config = self._configure_groupwise(config, options["skip_gw_check"])
         else:
-            print('Hmmmm,  there is an administrator already defined')
-            admin = Admin.objects.all()[0]
-            print('The admin name is %s' % admin.username)
-            answer = input('Do you want to nuke it an create a new Admin?  (y/n) :')
-            if answer.lower() == 'y':
-                admin.delete()
-                self.createAdmin()
+            self.stdout.write(f"Using existing GroupWise server {config.gwHost}:{config.gwPort}")
 
-        print("Two more tasks to go, create a gwhelpdesk init script and the nginx conf file")
-        helpdeskScript = 'helpdesk/management/commands/gwhelpdesk'
-        if os.path.isfile(helpdeskScript):
-            destination = '/etc/init.d/gwhelpdesk'
-            if os.path.isfile(destination):
-                print("gwhelpdesk script exists,  will rename it and replace")
-                move('/etc/init.d/gwhelpdesk', '/etc/init.d/gwhelpdesk.bak')
-            copy2(helpdeskScript, destination)
-        else:
-            print("Script not found")
-            exit()
+        admin = Admin.objects.first()
+        if admin is None:
+            self._create_admin()
+        elif self._yes_no(
+            f"Replace existing site administrator {admin.username}", default=False
+        ):
+            admin.delete()
+            self._create_admin()
 
-        nginxConfig = 'helpdesk/management/commands/nginx.conf'
-        nginxScript = 'helpdesk/management/commands/rcnginx'
+        self.stdout.write(self.style.SUCCESS("gwhelpdesk setup completed."))
+        self.stdout.write(
+            "Run 'python manage.py runserver' for testing or deploy with Gunicorn/systemd."
+        )
 
-        if os.path.isfile(nginxScript):
-            try:
-                dest = '/usr/sbin/rcnginx'
-                if os.path.isfile(dest):
-                    print("rcnginx exists")
-                else:
-                    print("copying rcnginx to /usr/sbin")
-                    copy2(nginxScript, dest)
-            except IOError as e:
-                print(e)
+    def _configure_groupwise(self, existing, skip_check):
+        host = input(f"GroupWise Admin host [{getattr(existing, 'gwHost', '')}]: ").strip()
+        host = host or (existing.gwHost if existing else "")
+        if not host:
+            raise CommandError("A GroupWise Admin host is required")
 
-        if os.path.isfile(nginxConfig):
-            try:
-                destination = '/etc/nginx/nginx.conf'
-                if os.path.isfile(destination):
-                    os.remove(destination)
-                    bak = '/etc/nginx/nginx.conf.bak'
-                    if os.path.isfile(bak):
-                        os.remove(bak)
-                    copy2(nginxConfig, '/etc/nginx/')
-                    move('/etc/nginx/nginx.conf', '/etc/nginx/nginx.conf.bak')
-                else:
-                    copy2(nginxConfig, '/etc/nginx/')
-                    move('/etc/nginx/nginx.conf', '/etc/nginx/nginx.conf.bak')
-            except IOError as e:
-                print(e)
+        default_port = str(existing.gwPort if existing else 9710)
+        port_text = input(f"GroupWise Admin port [{default_port}]: ").strip() or default_port
+        try:
+            port = int(port_text)
+        except ValueError as exc:
+            raise CommandError("The GroupWise Admin port must be numeric") from exc
 
-        if os.path.isfile('/usr/sbin/gwhelpdesk'):
-            move('/usr/sbin/gwhelpdesk', '/opt/sbin/gwhelpdesk.bak')
+        username = input(
+            f"GroupWise system administrator [{getattr(existing, 'gwAdmin', '')}]: "
+        ).strip()
+        username = username or (existing.gwAdmin if existing else "")
+        if not username:
+            raise CommandError("A GroupWise administrator is required")
 
-        if os.path.isfile('/usr/sbin/rcgwhelpdesk'):
-            os.remove('/usr/sbin/rcgwhelpdesk')
+        password = getpass("GroupWise administrator password: ")
+        if not password and existing:
+            password = existing.gwPass
+        if not password:
+            raise CommandError("A GroupWise administrator password is required")
 
-        os.symlink('/etc/init.d/gwhelpdesk', '/usr/sbin/rcgwhelpdesk')
-        os.chmod('/etc/init.d/gwhelpdesk', stat.S_IRWXU)
-        print("That's done..")
-        print('')
-        print('')
+        if not skip_check:
+            result = gwlib.gw(host, port, username, password).whoami()
+            if result == 1:
+                raise CommandError("Unable to connect to the GroupWise Admin service")
+            if "SYSTEM_RECORD" not in result.get("roles", []):
+                raise CommandError(f"{username} is not a GroupWise system administrator")
+            self.stdout.write(self.style.SUCCESS("GroupWise connection verified."))
 
-        self.editSettings()
-        self.enable()
+        config = existing or GWSettings()
+        config.gwHost = host
+        config.gwPort = port
+        config.gwAdmin = username
+        config.gwPass = password
+        config.save()
+        return config
 
-    def enable(self):
-        print("Enabling gwhelpdesk and nginx init scripts")
-        p = Popen(['chkconfig', 'gwhelpdesk', 'on'], stdout=PIPE)
-        for line in p.stdout:
-            print(line)
+    def _create_admin(self):
+        username = input("Site administrator username: ").strip()
+        if not username:
+            raise CommandError("A site administrator username is required")
+        first_name = input("First name: ").strip()
+        last_name = input("Last name: ").strip()
+        password = getpass("Site administrator password: ")
+        password2 = getpass("Confirm site administrator password: ")
+        if password != password2:
+            raise CommandError("Passwords do not match")
+        if not password:
+            raise CommandError("A site administrator password is required")
+        Admin.objects.create(
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            password=make_password(password),
+            password2="",
+            role=Admin.ADMIN,
+        )
+        self.stdout.write(self.style.SUCCESS(f"Administrator {username} created."))
 
-        p = Popen(['chkconfig', 'nginx', 'on'], stdout=PIPE)
-        for line in p.stdout:
-            print(line)
-
-        p = Popen(['chmod', '+x', '/usr/sbin/rcnginx'], stdout=PIPE)
-        for line in p.stdout:
-            print(line)
-
-        start = input('Start gwhelpdesk application now? (y/n) : ')
-        if start.lower() == 'y' or start.lower() == 'yes':
-            p = Popen(['rcnginx', 'start'], stdout=PIPE)
-            for line in p.stdout:
-                print(line)
-
-            p = Popen(['rcgwhelpdesk', 'start'], stdout=PIPE)
-            for line in p.stdout:
-                print(line)
-
-        else:
-            print("To manually start services")
-            print("Run rcnginx start and gwhelpdesk start")
-
-    def editSettings(self):
-        host = ''
-        ipaddr = ''
-        print('First, we need the ip address and/or hostname and port for the')
-        print('application to listen on.  (Yeh I now,  bad grammer)')
-        print('')
-
-        answer = input('Use IP address, DNS hostname, or Both (ip / host/ both): ')
-        if answer.lower() == 'ip':
-            ipaddr = self.ip()
-        elif answer.lower() == 'host':
-            host = self.host()
-        elif answer.lower() == 'both':
-            ipaddr = self.ip()
-            host = self.host()
-        else:
-            ipaddr = gethostbyname(gethostname())
-
-        nginxport = input("Listen port for ")
-
-        if ipaddr and host:
-            newline = "ALLOWED_HOSTS = ['%s', '%s']" % (ipaddr, host)
-        elif ipaddr and not host:
-            newline = "ALLOWED_HOSTS = ['%s']" % ipaddr
-        elif host and not ipaddr:
-            newline = "ALLOWED_HOSTS = ['%s']" % host
-
-        if ipaddr != None:
-            print("Using IP address: %s " % ipaddr)
-
-        if host != None:
-            print("Using Hostname : %s " % host)
-
-        filename = os.path.join(os.getcwd(), 'gwhelp/settings.py')
-        newfile = os.path.join(os.getcwd(), 'gwhelp/settings.py.bak')
-        os.rename(filename, newfile)
-        with open(newfile, 'r') as input_file, open(filename, 'w') as output_file:
-            for line in input_file:
-                line.strip()
-                if 'ALLOWED_HOSTS' in line:
-                    output_file.write(newline + '\n')
-                else:
-                    output_file.write(line)
-
-        ngconf = '/etc/nginx/nginx.conf'
-        newngconf = '/etc/nginx/nginx.conf.bak'
-
-        if not os.path.isfile(newngconf):
-            os.rename(ngconf, newngconf)
-
-        with open(newngconf, 'r') as input_file, open(ngconf, 'w') as output_file:
-            for line in input_file.readlines():
-                line.strip()
-                if 'proxy_set_header' in line:
-                    output_file.write(line)
-                    continue
-                if 'listen' in line:
-                    listenline = '''
-                listen     %s;
-        ''' % nginxport
-                    output_file.write(listenline)
-                    continue
-                if 'server_name' in line:
-                    serverline = '''
-                server_name     %s;
-        ''' % ipaddr
-                    output_file.write(serverline)
-                    continue
-                else:
-                    output_file.write(line)
-
-    def ip(self):
-        ipaddr = ''
-        print('Server IP is %s' % gethostbyname(gethostname()))
-        use = input('Use %s ? (y/n): ' % gethostbyname(gethostname()))
-        if use.lower() == 'y' or use.lower() == 'yes':
-            try:
-                ipaddr = gethostbyname(gethostname())
-            except:
-                ipaddr = input('Enter IP Address: ')
-        else:
-            ipaddr = input('Enter IP Address: ')
-        return ipaddr
-
-    def host(self):
-        print('Server FQDN name is %s' % getfqdn())
-        use = input('Use %s ? (y/n): ' % getfqdn())
-        if use.lower() == 'y' or use.lower() == 'yes':
-            host = getfqdn()
-        else:
-            host = input('Enter FQDN : ')
-            return host
-
-    def whoami(self, gwhost, gwport, gwadmin, gwpass):
-        gw = gwlib.gw(gwhost, gwport, gwadmin, gwpass)
-        whoami = gw.whoami()
-        return whoami
-
-    def updateConfig(self):
-        print('GroupWise Admin Server Settings Configuration\n')
-        gwhost = input("GroupWise Admin Server IP/Hostname: ")
-        gwport = input('Admin Server PORT: ')
-        gwadmin = input('GroupWise System Administrator: ')
-        gwpass = getpass('Administrator Password: ')
-        gwconfig = GWSettings.objects.all()[0]
-        gwconfig.gwHost = gwhost
-        gwconfig.gwPort = gwport
-        gwconfig.gwAdmin = gwadmin
-        gwconfig.gwPass = gwpass
-        gwconfig.save()
-        whoami = self.whoami(gwhost, gwport, gwadmin, gwpass)
-        if whoami == 1:
-            print("Connection to GroupWise Admin Service Failed")
-        elif 'roles' in list(whoami.keys()):
-            if 'SYSTEM_RECORD' in whoami['roles']:
-                print("Login to GroupWise Admin service successful")
-            else:
-                print("%s is not a System Administrator.  Supply proper GroupWise system admin credentials" % gwadmin)
-                answer = input('Shall we try again?  (y/n) :')
-                if answer.lower() == 'y':
-                    self.updateConfig()
-        else:
-            print("Error validating Administrator login: %s " % whoami['statusMsg'])
-            answer = input('Shall we try again?  (y/n) :')
-            if answer.lower() == 'y':
-                self.updateConfig()
-
-    def createPassword(self, password):
-        hasher = PBKDF2PasswordHasher()
-        mypassword = hasher.encode(password=password,
-                                   salt='salt',
-                                   iterations=10000
-                                   )
-        return mypassword
-
-    def createAdmin(self):
-        admin = Admin()
-        admin.username = input("Administrator User Name: ")
-        admin.first_name = input("First Name: ")
-        admin.last_name = input('Last Name: ')
-        password = getpass('Password: ')
-        admin.password = self.createPassword(password)
-        admin.role = 'AD'
-        admin.save()
-        print("Administrator: %s created" % admin.username)
+    @staticmethod
+    def _yes_no(prompt, default=False):
+        suffix = " [Y/n]: " if default else " [y/N]: "
+        answer = input(prompt + suffix).strip().lower()
+        if not answer:
+            return default
+        return answer in {"y", "yes"}
