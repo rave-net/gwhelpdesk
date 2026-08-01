@@ -1,760 +1,344 @@
-import requests, json, time
-from requests import ConnectionError
-requests.packages.urllib3.disable_warnings()
-from gwhelp import settings
-from pprint import pprint
+from __future__ import annotations
+
+import os
+import time
+from typing import Any
+from urllib.parse import quote
+
+import requests
+from django.conf import settings
+
+
+class GroupWiseError(RuntimeError):
+    """Raised when the GroupWise Admin REST API returns an error."""
+
+
 class gw:
     def __init__(self, gwHost, gwPort, gwAdmin, gwPass):
-
-        self.session = requests.Session()
-        self.session.auth = (gwAdmin, gwPass)
-        self.session.verify = False
-        self.session.headers = {
-            'Content-Type':'application/json',
-            'Accept':'application/json'
-        }
-
-        self.baseUrl = 'https://%s:%s' % (gwHost, gwPort)
+        self.baseUrl = f"https://{gwHost}:{gwPort}"
         self.gwAdmin = gwAdmin
+        self.timeout = getattr(settings, "GW_REQUEST_TIMEOUT", 10)
+        self.session = requests.Session()
+        self.session.auth = (gwAdmin, os.environ.get("GW_ADMIN_PASSWORD", gwPass))
+        self.session.verify = getattr(settings, "GW_VERIFY_TLS", True)
+        self.session.headers.update({"Accept": "application/json"})
 
-    def checkResponse(self, response):
-        if response.text:
-            dict = json.loads(response.text)
-            if 'object' in list(dict.keys()):
-                objects = dict['object']
-                return objects
-            else:
-                return dict
-        else:
+    def _request(self, method: str, path: str, **kwargs):
+        url = path if path.startswith("http") else f"{self.baseUrl}{path}"
+        kwargs.setdefault("timeout", self.timeout)
+        response = self.session.request(method, url, **kwargs)
+        if response.status_code >= 400:
+            detail = response.text.strip() or response.reason
+            raise GroupWiseError(f"GroupWise API {response.status_code}: {detail}")
+        return response
+
+    @staticmethod
+    def checkResponse(response):
+        if not response.content:
             return None
+        payload = response.json()
+        return payload.get("object", payload)
+
+    def _json(self, method: str, path: str, **kwargs):
+        return self.checkResponse(self._request(method, path, **kwargs))
 
     def whoami(self):
-        url = '%s/gwadmin-service/system/whoami' % self.baseUrl
         try:
-            response = self.session.get(url, timeout=10)
-        except:
+            return self._json("GET", "/gwadmin-service/system/whoami") or {}
+        except requests.RequestException:
             return 1
-        if response.text:
-            dict = json.loads(response.text)
-            return dict
-        else:
-            return response
 
     def objectCount(self, gwtype):
-        url = '%s/gwadmin-service/list/%s' % (self.baseUrl, gwtype)
-        response = self.session.get(url)
-        if response.text:
-            dict = json.loads(response.text)
-            if 'resultInfo' in list(dict.keys()):
-                if dict['resultInfo']['outOf'] == 0:
-                    return 0
-                else:
-                    return dict['resultInfo']['outOf']
+        response = self._request("GET", f"/gwadmin-service/list/{gwtype}").json()
+        return response.get("resultInfo", {}).get("outOf", 0)
+
+    def _paged(self, object_type: str, next_id=0, count=8):
+        params = {"count": count}
+        try:
+            next_id = int(next_id or 0)
+        except (TypeError, ValueError):
+            next_id = 0
+        if next_id > 1:
+            params["nextId"] = next_id
+        payload = self._request(
+            "GET", f"/gwadmin-service/list/{object_type}", params=params
+        ).json()
+        return payload.get("object", []), payload.get("resultInfo", {}).get("nextId", 1)
 
     def pageUsers(self, nextId):
-        retvalue = {}
-        self.userList = []
-        if nextId > 1:
-            url = '%s/gwadmin-service/list/user?count=8&nextID=%s' % (self.baseUrl, nextId)
-        else:
-            url = '%s/gwadmin-service/list/user?count=8' % (self.baseUrl)
-        nextId = self.getUsers(url)
-        if nextId != 1:
-            retvalue['nextId'] = nextId
-        else:
-            retvalue['nextId'] = 1
-        retvalue['userList'] = self.userList
-        return retvalue
+        users, next_id = self._paged("user", nextId)
+        return {"userList": users, "nextId": next_id or 1}
 
     def allUsers(self):
-        self.userList = []
-        url = '%s/gwadmin-service/list/user?count=1000' % self.baseUrl
-        nextId = self.getUsers(url)
-        while nextId != 1:
-            nextUrl = '%s&nextId=%s' % (url, nextId)
-            nextId = self.getUsers(nextUrl)
-        return self.userList
+        users = []
+        next_id = 0
+        while True:
+            page, next_id = self._paged("user", next_id, 1000)
+            users.extend(page)
+            if not next_id or int(next_id) <= 1:
+                return users
 
     def pageGroups(self, nextId):
-        retvalue = {}
-        self.groupList = []
-        if int(nextId) > 1:
-            url = '%s/gwadmin-service/list/group?count=8&nextID=%s' % (self.baseUrl, nextId)
-        else:
-            url = '%s/gwadmin-service/list/group?count=8' % (self.baseUrl)
-
-        response = self.session.get(url)
-        if 'nextId' in response.text:
-            nextId =  json.loads(response.text)['resultInfo']['nextId']
-        grps = self.checkResponse(response)
-        for grp in grps:
-            grp['url'] = grp['@url']
-
-        if nextId != 1:
-            retvalue['nextId'] = nextId
-        else:
-            retvalue['nextId'] = 1
-
-        retvalue['groupList'] = grps
-        return retvalue
-
-    def gwcheck(self, action, id, options):
-        user = self.getObject(id)
-        checkurl = '%s%s/gwcheck' % (self.baseUrl, user['@url'])
-        if action == 'ANALYZE':
-            checkoptions = ['checkAttachments', 'checkIndex', 'statistics', 'updateTotals', 'fixProblems', 'structure', 'contents']
-            analyzeOptions = {}
-            verify = []
-            for option in checkoptions:
-                if option in options:
-                    if option == 'structure':
-                        verify.append('STRUCTURE')
-                    elif option == 'contents':
-                        verify.append('CONTENTS')
-                    else:
-                        op = 'true'
-                else:
-                    op = 'false'
-                analyzeOptions['verify'] = verify
-                analyzeOptions[option] = op
-
-            data = {
-                "analyzeOptions": analyzeOptions,
-                "files": ["USER", "MSG"],
-                "action": "ANALYZE",
-                "eventType": "MAINTENANCE",
-                "message": "",
-                "sendToCc": "",
-                "verbose": 'true',
-                "distribute": ["ADMIN", 'USERS']
-            }
-
-        elif action == 'EXPIRE':
-            data = {
-                'expireOptions': options,
-                "files": ["USER"],
-                "action": "EXPIRE",
-                "eventType": "MAINTENANCE",
-                "message": "",
-                "sendToCc": "",
-                "verbose": 'true',
-                "exclude": 'null',
-                "distribute": ["ADMIN",'USERS']
-            }
-
-        elif action == 'REBUILD':
-            data = options
-
-        elif action == 'PREFS':
-            data = options
-
-        results = self.session.post(checkurl, data=json.dumps(data))
-        if results.text:
-            return results.text
-        else:
-            return 0
+        groups, next_id = self._paged("group", nextId)
+        for group in groups:
+            group["url"] = group.get("@url", "")
+        return {"groupList": groups, "nextId": next_id or 1}
 
     def getAllGroups(self):
-        glist = []
-        url = '%s/gwadmin-service/list/group' % self.baseUrl
-        try:
-            response = self.session.get(url)
-            g = self.checkResponse(response)
-            for grp in g:
-                data = [grp['name'], grp['id'], grp['domainName'], grp['postOfficeName'], grp['visibility'], grp['@url']]
-                grp['url'] = grp['@url']
-
-                if 'ldapDn' in list(grp.keys()):
-                    dn = grp['ldapDn']
-                    grp['ldapDn'] = dn
-
-                glist.append(grp)
-            return glist
-
-        except:
-            pass
+        groups, _ = self._paged("group", 0, 10000)
+        for group in groups:
+            group["url"] = group.get("@url", "")
+        return groups
 
     def getGroups(self):
-        glist = []
-        url = '%s/gwadmin-service/list/group?count=8' % self.baseUrl
-        try:
-            response = self.session.get(url)
-            g = self.checkResponse(response)
-            for grp in g:
-                data = [grp['name'], grp['id'], grp['domainName'], grp['postOfficeName'], grp['visibility'], grp['@url']]
+        return self.getAllGroups()
 
-                grp['url'] = grp['@url']
-                glist.append(grp)
-            return glist
-        except:
-            pass
+    def getUserCount(self):
+        info = self._json("GET", "/gwadmin-service/system/info") or {}
+        return info.get("userCount", 0) + info.get("externalUserCount", 0)
 
-    def getGroup(self, id):
-        url = '%s/gwadmin-service/object/%s' %( self.baseUrl, id)
-        response = self.session.get(url)
-        groupdata = self.checkResponse(response)
-        return groupdata
+    def getGroupCount(self):
+        info = self._json("GET", "/gwadmin-service/system/info") or {}
+        return info.get("groupCount", 0) + info.get("externalGroupCount", 0)
 
-    def getGroupMembers(self, url):
-        geturl = '%s%s/members' % (self.baseUrl, url)
-        response = self.session.get(geturl)
-        if response.text:
-            j = json.loads(response.text)
-            print(j)
-            if j['resultInfo']['outOf'] == 0:
-                return 0
-            else:
-                members = self.checkResponse(response)
-                return members
+    def getObject(self, object_id):
+        return self._json("GET", f"/gwadmin-service/object/{quote(str(object_id), safe='.')}")
 
-    def deleteGroup(self, id):
-        grp = self.getObject(id)
-        url = grp['@url']
-        delurl = '%s%s' % (self.baseUrl, url)
-        delgrp = self.session.delete(delurl)
-        return 0
+    def getObjectByUrl(self, userurl):
+        return self._json("GET", userurl)
 
-    def updateGroup(self, id, data, type):
-        grp = self.getObject(id)
+    def getGroup(self, object_id):
+        return self.getObject(object_id)
 
-        if type == 'u':
-            grpurl = '%s%s' % (self.baseUrl, grp['@url'])
-            update = self.session.put(grpurl, data=json.dumps(data))
-            return 200
-        elif type == 'm':
-            grpurl = '%s%s/members' % (self.baseUrl, grp['@url'])
-            update = self.session.post(grpurl, data=json.dumps(data))
-            return 200
-        elif type == 'd':
-            member = data['memberid']
-            grpurl = '%s%s/members/%s' % (self.baseUrl, grp['@url'], member)
-            update = self.session.delete(grpurl)
-            return  200
-        else:
-            return 0
+    def userSearch(self, userid):
+        return self._search(userid, "USER")
 
-    def addGroup(self,gwdata, pourl):
-        url = '%s%s/groups' % (self.baseUrl, pourl )
-        data = {
-            'name': gwdata['name'],
-            'visibility': gwdata['visibility']
+    def groupSearch(self, groupid):
+        return self._search(groupid, "GROUP")
+
+    def _search(self, text, object_prefix):
+        payload = self._request(
+            "GET", "/gwadmin-service/system/search", params={"text": text}
+        ).json()
+        results = []
+        for item in payload.get("object", []):
+            if object_prefix not in item.get("id", ""):
+                continue
+            details = self.getObject(item["id"])
+            details["pendingOp"] = "true" if "pendingOp" in item else "false"
+            if object_prefix == "USER":
+                details["ldap"] = "true" if details.get("ldapDn") else "false"
+            results.append(details)
+        return results
+
+    def getPolist(self):
+        payload = self._request("GET", "/gwadmin-service/list/post_office").json()
+        return [self._post_office(item) for item in payload.get("object", [])]
+
+    def getExtPolist(self):
+        payload = self._request(
+            "GET", "/gwadmin-service/list/post_office", params={"externalRecord": "true"}
+        ).json()
+        return [self._post_office(item) for item in payload.get("object", [])]
+
+    @staticmethod
+    def _post_office(item):
+        return {
+            "name": item.get("name", ""),
+            "url": item.get("@url", ""),
+            "@url": item.get("@url", ""),
+            "id": item.get("id", ""),
+            "ldap": "LDAP" in item.get("securitySettings", []),
+            "external": bool(item.get("externalRecord")),
         }
-        results = self.session.post(url, data=json.dumps(data))
 
+    def getDomlist(self):
+        payload = self._request("GET", "/gwadmin-service/list/domain").json()
+        return [
+            {
+                "name": item.get("name", ""),
+                "url": item.get("@url", ""),
+                "external": bool(item.get("externalRecord")),
+            }
+            for item in payload.get("object", [])
+        ]
 
+    def checkPoLdap(self, postoffice):
+        payload = self._request(
+            "GET", "/gwadmin-service/list/post_office", params={"name": postoffice}
+        ).json()
+        objects = payload.get("object", [])
+        return int(bool(objects and "LDAP" in objects[0].get("securitySettings", [])))
 
-        if results.headers:
-            return results.headers
-        else:
-            return results.status_code
+    def addrFormats(self):
+        return ["HOST", "USER", "LAST_FIRST", "FIRST_LAST", "FLAST"]
 
-    def delFromGroup(self, url, userid):
-        delurl = '%s%s/members/%s' % (self.baseUrl, url, userid)
-        response = self.session.delete(delurl)
+    def iDomains(self):
+        payload = self._request("GET", "/gwadmin-service/system/internetdomains").json()
+        return [item["name"] for item in payload.get("object", []) if "name" in item]
+
+    def defIdom(self):
+        return (self._json("GET", "/gwadmin-service/system") or {}).get(
+            "internetDomainName"
+        )
+
+    def userFormats(self, object_id):
+        return self.getObject(object_id).get("allowedAddressFormats", {})
+
+    def userAddresses(self, userurl):
+        payload = self._json("GET", f"{userurl}/emailaddresses")
+        if isinstance(payload, dict) and isinstance(payload.get("allowed"), list):
+            return "\n".join(payload["allowed"])
+        return payload
+
+    def getpic(self, url):
+        return self._request(
+            "GET", url, headers={"Accept": "application/octet-stream"}
+        ).content
+
+    def addUser(self, pourl, data):
+        response = self._request("POST", f"{pourl}/users", json=data)
+        return dict(response.headers)
+
+    addExtUser = addUser
+
+    def updateUser(self, object_id, data):
+        obj = self.getObject(object_id)
+        self._request("PUT", obj["@url"], json=data)
+        return self.getObject(object_id)
+
+    def changePass(self, object_id, password):
+        obj = self.getObject(object_id)
+        response = self._request(
+            "PUT", f"{obj['@url']}/clientoptions", json={"userPassword": {"value": password}}
+        )
         return response.status_code
 
+    def delUser(self, object_id):
+        obj = self.getObject(object_id)
+        self._request("DELETE", obj["@url"])
+        for _ in range(9):
+            try:
+                data = self.getObject(object_id)
+            except GroupWiseError:
+                return 0
+            if not data.get("pendingOp"):
+                return 0
+            time.sleep(2)
+        return 1
+
+    def dissociate(self, object_id):
+        obj = self.getObject(object_id)
+        return self._request("DELETE", f"{obj['@url']}/directorylink").text
+
+    def addGroup(self, gwdata, pourl):
+        response = self._request("POST", f"{pourl}/groups", json=gwdata)
+        return dict(response.headers)
+
+    def updateGroup(self, object_id, data, operation_type="u"):
+        obj = self.getObject(object_id)
+        if operation_type == "m":
+            path = f"{obj['@url']}/members"
+            method = "POST"
+        else:
+            path = obj["@url"]
+            method = "PUT"
+        return self._request(method, path, json=data).status_code
+
+    def deleteGroup(self, object_id):
+        obj = self.getObject(object_id)
+        self._request("DELETE", obj["@url"])
+        return 0
+
+    def getGroupMembers(self, url):
+        payload = self._request("GET", f"{url}/members").json()
+        return payload.get("object", [])
+
     def addUserToGroup(self, grpdata):
-        url = '%s%s/members' % (self.baseUrl, grpdata['url'])
-        data = {'id': grpdata['id']}
-        response = self.session.post(url, data=json.dumps(data))
-        if response.text:
-            results = self.checkResponse(response)
-            if 'object' in results:
-                #print results
-                print(response.headers)
-                return response.headers
+        response = self._request(
+            "POST", f"{grpdata['url']}/members", json={"id": grpdata["id"]}
+        )
+        return response.status_code
 
+    def delFromGroup(self, url, userid):
+        return self._request("DELETE", f"{url}/members/{userid}").status_code
 
-
+    def userGroupMembership(self, object_id):
+        user = self.getObject(object_id)
+        payload = self._request("GET", f"{user['@url']}/groupmemberships").json()
+        return [
+            [item.get("name"), item.get("participation"), item.get("id")]
+            for item in payload.get("object", [])
+        ]
 
     def addUserToGroups(self, groups, userid):
         user = self.getObject(userid)
-        url = '%s%s/groupmemberships' % (self.baseUrl, user['@url'])
-        for group in groups:
-            data = {'add': {'id': group}}
-            results = self.session.put(url, data=json.dumps(data))
+        for group_id in groups:
+            self._request(
+                "PUT", f"{user['@url']}/groupmemberships", json={"add": {"id": group_id}}
+            )
 
-    def getUserCount(self):
-        url = '%s/gwadmin-service/system/info' % self.baseUrl
-        response = self.session.get(url)
-        info = self.checkResponse(response)
-        if info:
-            total = info['userCount'] + info['externalUserCount']
-            return total
-
-    def getGroupCount(self):
-        url = '%s/gwadmin-service/system/info' % self.baseUrl
-        response = self.session.get(url)
-        info = self.checkResponse(response)
-        if info:
-            total = info['groupCount'] + info['externalGroupCount']
-            return total
-
-    def getpic(self, url):
-        self.session.headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/octet-stream'
-        }
-
-        response = self.session.get(url)
-        #print response
-        from io import StringIO
-        image = response.open(StringIO())
-        self.session.headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
-        return image
-
-    def getUsers(self, url):
-        response = self.session.get(url)
-        if response.text:
-            sj = json.loads(response.text)
-            if 'object' in list(sj.keys()):
-                for user in sj['object']:
-                    self.userList.append(user)
-            if 'resultInfo' in list(sj.keys()):
-                if 'nextId' in sj['resultInfo']:
-                    nextId = sj['resultInfo']['nextId']
-                    return nextId
-            else:
-                return 1
-
-    def userSearch(self, userid):
-        url = '%s/gwadmin-service/system/search?text=%s' % (self.baseUrl, userid)
-        response = self.session.get(url)
-        gwusers = []
-        if response.text:
-            dict = json.loads(response.text)
-            if dict['resultInfo']['outOf'] == 0:
-                return gwusers
-            elif 'object' in list(dict.keys()):
-                objects = dict['object']
-            else:
-                return gwusers
-
-        for obj in objects:
-            userUrl = "%s%s" % (self.baseUrl, obj['@url'])
-            resp = self.session.get(userUrl)
-            user = self.checkResponse(resp)
-            if 'USER' in user['id']:
-                details = self.getObject(user['id'])
-                details['pendingOp'] = 'false'
-                if 'pendingOp' in list(user.keys()):
-                    details['pendingOp'] = 'true'
-                details['ldap'] = 'false'
-                ldap = self.checkPoLdap(user['postOfficeName'])
-                if ldap == 1:
-                    if 'ldapDn' in list(user.keys()):
-                        details['ldap'] = 'true'
-                gwusers.append(details)
-        return gwusers
-
-    def groupSearch(self, groupid):
-        url = '%s/gwadmin-service/system/search?text=%s' % (self.baseUrl, groupid)
-        response = self.session.get(url)
-        gwgrps = []
-        if response.text:
-            dict = json.loads(response.text)
-            if dict['resultInfo']['outOf'] == 0:
-                return gwgrps
-            elif 'object' in list(dict.keys()):
-                objects = dict['object']
-            else:
-                return gwgrps
-
-        for obj in objects:
-            userUrl = "%s%s" % (self.baseUrl, obj['@url'])
-            resp = self.session.get(userUrl)
-            group = self.checkResponse(resp)
-            if 'GROUP' in group['id']:
-                details = self.getObject(group['id'])
-                details['pendingOp'] = 'false'
-                if 'pendingOp' in list(group.keys()):
-                    details['pendingOp'] = 'true'
-                gwgrps.append(details)
-        return gwgrps
-
-    def getObject(self, id):
-        url = '%s/gwadmin-service/object/%s' % (self.baseUrl, id)
-        response = self.session.get(url, timeout=5)
-        object = self.checkResponse(response)
-        return object
-
-    def getObjectByUrl(self, userurl):
-        response = self.session.get(userurl, timeout=5)
-        object = self.checkResponse(response)
-        return object
-
-    def checkPoLdap(self, postoffice):
-        url = '%s/gwadmin-service/list/post_office?name=%s' % (self.baseUrl, postoffice)
-        response = self.session.get(url,timeout=5)
-        podata = self.checkResponse(response)[0]
-        if podata['securitySettings']:
-            if 'LDAP' in podata['securitySettings']:
-                return 1
-            else:
-                return 0
-
-    def addrFormats(self):
-        addressFormats = []
-        addressFormats.append('HOST')
-        addressFormats.append('USER')
-        addressFormats.append('LAST_FIRST')
-        addressFormats.append('FIRST_LAST')
-        addressFormats.append('FLAST')
-        return addressFormats
-
-    def userFormats(self, id):
-        obj = self.getObject(id)
-        formats = obj['allowedAddressFormats']
-        return formats
-
-    def userAddresses(self, userurl):
-
-        url = "%s%s/emailaddresses" % (self.baseUrl, userurl)
-        response = self.session.get(url, timeout=5)
-        emailAddrs = self.checkResponse(response)
-        try:
-            addresses = "\n".join(emailAddrs['allowed'])
-            return addresses
-        except:
-            return emailAddrs
-
-    def updateUser(self, id, data):
-        obj = self.getObject(id)
-        url = '%s%s' % (self.baseUrl, obj['@url'])
-        response = self.session.put(url, data=json.dumps(data) , timeout=10)
-        response2 = self.session.get(url)
-        newdata = self.checkResponse(response2)
-        return newdata
-
-    def iDomains(self):
-        idomains = []
-        url = '%s/gwadmin-service/system/internetdomains' % self.baseUrl
-        try:
-            response = self.session.get(url, timeout=5)
-        except ConnectionError as e:
-            return e
-        objects = json.loads(response.text)['object']
-        for idom in objects:
-            idomains.append(idom['name'])
-        return idomains
-
-    def defIdom(self):
-        url = '%s/gwadmin-service/system' % self.baseUrl
-        response = self.session.get(url, timeout=5)
-        sysdata = self.checkResponse(response)
-        return sysdata['internetDomainName']
-
-    def changePass(self, id, password):
-        obj = self.getObject(id)
-        url = '%s%s/clientoptions' % (self.baseUrl, obj['@url'])
-        data = {"userPassword":{"value": password}}
-        response = self.session.put(url, data=json.dumps(data))
-
-    def delUser(self, id):
-        obj = self.getObject(id)
-        url = '%s%s' % (self.baseUrl, obj['@url'])
-        response = self.session.delete(url)
-        pending = 1
-        for i in range(1,10):
-            response2 = self.session.get(url)
-            data = self.checkResponse(response2)
-            if 'pendingOp' in list(data.keys()):
-                time.sleep(2)
-            else:
-                pending = 0
-                return pending
-        return pending
-
-    def getPolist(self):
-        poList = []
-        url = '%s/gwadmin-service/list/post_office' % self.baseUrl
-        response = self.session.get(url, timeout=5)
-        objects = self.checkResponse(response)
-        for object in objects:
-            podict = {}
-            podict['name'] = object['name']
-            podict['url'] = object['@url']
-            podict['id'] = object['id']
-            if 'LDAP' in object['securitySettings']:
-                podict['ldap'] = True
-            else:
-                podict['ldap'] = False
-            if 'externalRecord' in list(object.keys()):
-                podict['external'] = True
-            else:
-                podict['external'] = False
-            poList.append(podict)
-        return poList
-
-    def getExtPolist(self):
-        poList = []
-        url = '%s/gwadmin-service/list/post_office?externalRecord=true' % self.baseUrl
-        response = self.session.get(url, timeout=5)
-        print(response.text)
-        objects = self.checkResponse(response)
-        for object in objects:
-            podict = {}
-            podict['name'] = object['name']
-            podict['url'] = object['@url']
-            podict['id'] = object['id']
-
-            if 'externalRecord' in list(object.keys()):
-                podict['external'] = True
-            else:
-                podict['external'] = False
-            poList.append(podict)
-        return poList
-
-    def getPolist(self):
-        poList = []
-        url = '%s/gwadmin-service/list/post_office' % self.baseUrl
-        response = self.session.get(url, timeout=5)
-        objects = self.checkResponse(response)
-        for object in objects:
-            podict = {}
-            podict['name'] = object['name']
-            podict['url'] = object['@url']
-            podict['id'] = object['id']
-            if 'LDAP' in object['securitySettings']:
-                podict['ldap'] = True
-            else:
-                podict['ldap'] = False
-            if 'externalRecord' in list(object.keys()):
-                podict['external'] = True
-            else:
-                podict['external'] = False
-            poList.append(podict)
-        return poList
-
-    def getDomlist(self):
-        domList = []
-        url = '%s/gwadmin-service/list/domain' % self.baseUrl
-        response = self.session.get(url, timeout=5)
-        objects = self.checkResponse(response)
-        for object in objects:
-            domdict = {}
-            domdict['name'] = object['name']
-            domdict['url'] = object['@url']
-
-            if 'externalRecord' in list(object.keys()):
-                domdict['external'] = True
-            else:
-                domdict['external'] = False
-            domList.append(domdict)
-        return domList
-
-    def addUser(self, pourl, data):
-        url = '%s%s/users' % (self.baseUrl, pourl)
-        name = data['name']
-        response = self.session.post(url, data=json.dumps(data), timeout=5)
-        if response.text:
-            print(json.loads(response.text))
-            #return json.loads(response.text)
-            return requests.headers
-        else:
-            return response.headers
-
-    def addExtUser(self, pourl, data):
-        url = '%s%s/users' % (self.baseUrl, pourl)
-        name = data['name']
-        response = self.session.post(url, data=json.dumps(data), timeout=5)
-        if response.text:
-            print(json.loads(response.text))
-            #return json.loads(response.text)
-            return requests.headers
-        else:
-            return response.headers
-
-    def getExtUsers(self):
-        url = '%s/gwadmin-service/list/user?externalRecord=true' % self.baseUrl
-        #print url
-        response = self.session.get(url)
-        #print response.text
-        users = self.checkResponse(response)
-        print(users)
-        return users
-    def dissociate(self, id):
-        user = self.getObject(id)
-        userurl = user['@url']
-        url = '%s%s/directorylink' % (self.baseUrl, userurl)
-        dis = self.session.delete(url)
-        return dis.text
-
-    def userInfo(self,id):
-        url = '%s/gwadmin-service/object/%s' % (self.baseUrl, id)
-        response = self.session.get(url, timeout=5)
-        object = self.checkResponse(response)
-        newurl = '%s%s/info' % (self.baseUrl,object['@url'])
-        resp = self.session.get(newurl)
-        if resp.text:
-            doc = json.loads(resp.text)
-            return doc
-        else:
-            return "Unable to get user info"
-
-    def userGroupMembership(self, id):
-        membership = []
-        url = '%s/gwadmin-service/object/%s' % (self.baseUrl, id)
-        response = self.session.get(url, timeout=5)
-        object = self.checkResponse(response)
-        newurl = '%s%s/groupmemberships' % (self.baseUrl, object['@url'])
-        response = self.session.get(newurl)
-        if response.text:
-            dict = json.loads(response.text)
-            if 'object' in list(dict.keys()):
-                objects = dict['object']
-                for grp in objects:
-                    data = []
-                    data.append(grp['name'])
-                    data.append(grp['participation'])
-                    data.append(grp['id'])
-                    membership.append(data)
-                return membership
-            elif 'resultInfo' in list(dict.keys()):
-                return None
-
-    def updateGroupMembership(self, name, userid, groupid, particpation ):
+    def updateGroupMembership(self, name, userid, groupid, participation):
         user = self.getObject(userid)
-        url = '%s%s/groupmemberships' %(self.baseUrl, user['@url'])
-        data = {
-            'update':[{
-                'id':groupid,
-                'participation': particpation,
-                'name': name,
-                    }]
-                }
-        results = self.session.put(url,data=json.dumps(data))
+        data = {"update": [{"id": groupid, "participation": participation, "name": name}]}
+        return self._request("PUT", f"{user['@url']}/groupmemberships", json=data).status_code
 
     def removeFromGroup(self, userid, grpid):
         user = self.getObject(userid)
-        url = '%s%s/groupmemberships/%s' % (self.baseUrl, user['@url'], grpid)
-        results = self.session.delete(url)
+        return self._request("DELETE", f"{user['@url']}/groupmemberships/{grpid}").status_code
 
-    def renameUser(self, id, newid):
-        user = self.getObject(id)
-        pourl = '%s%s/rename' % (self.baseUrl, user['links'][1]['@href'])
-        data = {'objectId': id,
-                'newObjectId': newid,
-                'createNickname':'false'
-                }
-        response = self.session.post(pourl,data=json.dumps(data))
+    def renameUser(self, object_id, newid):
+        user = self.getObject(object_id)
+        return self._request(
+            "POST", f"{user['@url']}/rename", json={"objectId": object_id, "newObjectId": newid, "createNickname": False}
+        ).status_code
 
     def moveUser(self, userid, poid):
-        url = '%s/gwadmin-service/system/moverequests' % self.baseUrl
-        data = {
-              "sources" : [ {
-                "id" : userid
-              } ],
-              "postOfficeId" : poid,
-              "directoryUser" : 'false'
-            }
+        response = self._request(
+            "POST", "/gwadmin-service/system/moverequests", json={"sources": [{"id": userid}], "postOfficeId": poid, "directoryUser": False}
+        )
+        return "Succeeded" if response.status_code < 300 else response.text
 
-        response = self.session.post(url, data=json.dumps(data))
-        statusurl = '%s?name=%s' % (url, userid.split('.')[3])
-        status = self.session.get(statusurl)
-        if status.text:
-            dict = json.loads(status.text)
-            if 'succeeded' in list(dict.keys()):
-                return 'Succeeded'
-            else:
-                if 'lastAction' in list(dict.keys()):
-                    lastaction = dict['object']['moveStatus']['lastAction']
-                    return lastaction
+    def getExtUsers(self):
+        payload = self._request(
+            "GET", "/gwadmin-service/list/user", params={"externalRecord": "true"}
+        ).json()
+        return payload.get("object", [])
 
-    def resources(self, id):
-        user = self.getObject(id)
-        url = '%s%s/resources' % (self.baseUrl,user['@url'])
-        resourcelist = []
-        response = self.session.get(url)
-        if response.text:
-            dict = json.loads(response.text)
-            if 'object' in list(dict.keys()):
-                objects = dict['object']
-                for resource in objects:
-                    data = []
-                    data.append(resource['name'])
-                    data.append(resource['@url'])
-                    data.append(resource['id'])
-                    data.append(resource['postOfficeName'])
-                    data.append(resource['domainName'])
-                    resourcelist.append(data)
-                return resourcelist
-            elif 'resultInfo' in list(dict.keys()):
-                return None
-        return resourcelist
+    def resources(self, object_id):
+        user = self.getObject(object_id)
+        payload = self._request("GET", f"{user['@url']}/resources").json()
+        return [
+            [item.get("name"), item.get("@url"), item.get("id"), item.get("postOfficeName"), item.get("domainName")]
+            for item in payload.get("object", [])
+        ]
 
-    def delResource(self, url ):
-        delurl = '%s%s' % (self.baseUrl, url)
-        results = self.session.delete(delurl)
-        return results.text
+    def addResource(self, name, po, domain, owner):
+        response = self._request(
+            "POST", f"/gwadmin-service/domains/{domain}/postoffices/{po}/resources", json={"name": name, "domainName": domain, "postOfficeName": po, "owner": owner}
+        )
+        return 0 if "location" in response.headers else 1
 
-    def addResource(self,name, po, domain, owner ):
-        data = {
-            "name": name,
-            "domainName": domain,
-            "postOfficeName": po,
-            "owner": owner,
-        }
+    def delResource(self, url):
+        return self._request("DELETE", url).text
 
-        url = '%s/gwadmin-service/domains/%s/postoffices/%s/resources' % (self.baseUrl, domain, po )
-        results = self.session.post(url, data=json.dumps(data))
-        if 'location' in results.headers:
-            return 0
-        else:
-            return 1
+    def nicknames(self, object_id):
+        user = self.getObject(object_id)
+        payload = self._request("GET", f"{user['@url']}/nicknames").json()
+        return payload.get("object", [])
 
-    def nicknames(self, id):
-        user = self.getObject(id)
-        url = '%s%s/nicknames' % (self.baseUrl, user['@url'])
-        nicknamelist = []
-        response = self.session.get(url)
-        if response.text:
-            dict = json.loads(response.text)
-            if 'object' in list(dict.keys()):
-                objects = dict['object']
-                for nickname in objects:
-                    data = {}
-                    data['name'] =(nickname['name'])
-                    if 'givenName' in nickname:
-                        data['givenName'] = nickname['givenName']
-                    if 'surname' in nickname:
-                        data['surname'] = nickname['surname']
-                    data['url'] = nickname['@url']
-                    data['id'] = nickname['id']
-                    data['postOfficeName'] = nickname['postOfficeName']
-                    data['domainName'] = nickname['domainName']
-                    data['userDomainName'] = nickname['userDomainName']
-                    data['userPostOfficeName'] = nickname['userPostOfficeName']
-                    data['userName'] = nickname['userName']
-                    data['visibility'] = nickname['visibility']
-                    #data.append(nickname['preferredEmailAddress'])
-                    #if 'expirationDate' in nickname:
-                    #    data.append(nickname['expirationDate'])
-                    nicknamelist.append(data)
-
-                return nicknamelist
-            elif 'resultInfo' in list(dict.keys()):
-                return None
-        return nicknamelist
-
-    def addNickname(self, **kwargs):
-        data = {}
-        for key, value in kwargs.items():
-            data[key] = value
-        url = '%s/gwadmin-service/domains/%s/postoffices/%s/nicknames' % (self.baseUrl, data['domainName'], data['postOfficeName'] )
-        results = self.session.post(url, data=json.dumps(data))
-        if 'location' in results.headers:
-            return 0
-        else:
-            return 1
+    def addNickname(self, **data):
+        response = self._request(
+            "POST", f"/gwadmin-service/domains/{data['domainName']}/postoffices/{data['postOfficeName']}/nicknames", json=data
+        )
+        return 0 if "location" in response.headers else 1
 
     def delNickname(self, url):
-        delurl = '%s%s' % (self.baseUrl, url)
-        results = self.session.delete(delurl)
-        if not results.text:
-            return 0
-        else:
-            return 1
+        return 0 if not self._request("DELETE", url).text else 1
+
+    def gwcheck(self, action, object_id, options):
+        user = self.getObject(object_id)
+        payload: dict[str, Any] = dict(options)
+        payload.setdefault("action", action)
+        response = self._request("POST", f"{user['@url']}/gwcheck", json=payload)
+        return response.text or 0
